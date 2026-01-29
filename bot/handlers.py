@@ -3,6 +3,7 @@ Bot消息处理器
 处理所有用户交互，优先使用消息编辑
 """
 
+import functools
 import json
 import logging
 from typing import Dict, Any, Tuple
@@ -37,10 +38,14 @@ blacklist_service = BlacklistService()
 
 def check_authorization(func):
     """检查用户授权装饰器"""
+    @functools.wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
+        logger.debug(f"授权检查: 用户 {user_id}, 授权用户 {AUTHORIZED_USER_ID}")
         if user_id != AUTHORIZED_USER_ID:
-            await update.message.reply_text("❌ 您没有权限使用此Bot")
+            logger.warning(f"未授权用户尝试访问: {user_id}")
+            if update.message:
+                await update.message.reply_text("❌ 您没有权限使用此Bot")
             return
         return await func(update, context)
     return wrapper
@@ -110,6 +115,8 @@ async def safe_edit_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
 @check_authorization
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """开始命令"""
+    logger.info(f"收到 /start 命令，用户ID: {update.effective_user.id}")
+    
     welcome_text = """
 🤖 **Telegram Monitor Bot**
 
@@ -124,12 +131,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 请选择要使用的功能：
 """
     
-    message = await update.message.reply_text(
-        welcome_text, 
-        reply_markup=main_menu(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    await set_user_state(update.effective_user.id, "idle", message_id=message.message_id)
+    try:
+        message = await update.message.reply_text(
+            welcome_text, 
+            reply_markup=main_menu(),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        await set_user_state(update.effective_user.id, "idle", message_id=message.message_id)
+        logger.info(f"/start 命令处理完成，消息ID: {message.message_id}")
+    except Exception as e:
+        logger.error(f"/start 命令处理失败: {e}")
 
 
 @check_authorization
