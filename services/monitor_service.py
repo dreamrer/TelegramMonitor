@@ -42,6 +42,9 @@ class MonitorService:
     async def start_monitoring(self) -> Tuple[bool, str]:
         """开始监控"""
         try:
+            if await self.is_monitoring():
+                return True, "监控已在运行中"
+
             # 检查是否已登录
             if not await self.client_manager.is_logged_in():
                 return False, "请先登录Telegram账号"

@@ -10,6 +10,7 @@ import logging
 import os
 import random
 import uuid
+from time import monotonic
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -240,6 +241,9 @@ class TelegramClientManager:
         self.client: Optional[TelegramClient] = None
         self.is_monitoring = False
         self.target_chat_id: Optional[int] = None
+        self._message_handler = None
+        self._processed_messages: Dict[Tuple[int, int], float] = {}
+        self._processed_messages_lock = asyncio.Lock()
         
         # 用户和聊天缓存
         self.users: Dict[int, User] = {}
@@ -380,6 +384,7 @@ class TelegramClientManager:
     async def logout(self) -> bool:
         """退出登录"""
         try:
+            await self.stop_monitoring()
             if self.client:
                 await self.client.log_out()
                 await self.client.disconnect()
@@ -515,6 +520,10 @@ class TelegramClientManager:
         try:
             logger.info("=== 开始监控流程 ===")
 
+            if self.is_monitoring and self._message_handler:
+                logger.info("监控已在运行中，跳过重复注册监听器")
+                return True
+
             if not await self.is_logged_in():
                 logger.warning("监控失败：用户未登录")
                 return False
@@ -535,10 +544,15 @@ class TelegramClientManager:
             await self.client.catch_up()
             logger.info("✓ 消息同步完成")
 
+            async with self._processed_messages_lock:
+                self._processed_messages.clear()
+
             # 添加消息处理器
-            @self.client.on(events.NewMessage)
             async def message_handler(event):
                 await self._handle_new_message(event, keyword_matcher)
+
+            self.client.add_event_handler(message_handler, events.NewMessage)
+            self._message_handler = message_handler
 
             self.is_monitoring = True
             logger.info("✓ 消息处理器已注册，开始监控所有群组消息")
@@ -552,9 +566,12 @@ class TelegramClientManager:
     async def stop_monitoring(self) -> bool:
         """停止监控"""
         try:
-            if self.client:
-                # 移除所有事件处理器
-                self.client.remove_event_handler(self._handle_new_message)
+            if self.client and self._message_handler:
+                self.client.remove_event_handler(self._message_handler, events.NewMessage)
+                self._message_handler = None
+
+            async with self._processed_messages_lock:
+                self._processed_messages.clear()
             
             self.is_monitoring = False
             logger.info("停止监控消息")
@@ -574,6 +591,12 @@ class TelegramClientManager:
             chat_id = message.chat_id if message.chat_id else "Unknown"
             sender_id = message.sender_id if message.sender_id else "Unknown"
             has_text = bool(message.text)
+
+            if await self._is_duplicate_message(message.chat_id, message.id):
+                logger.info(
+                    f"跳过重复消息: chat_id={message.chat_id}, message_id={message.id}, sender_id={sender_id}"
+                )
+                return
             
             logger.info(f"📨 新消息 | 群组ID: {chat_id} | 发送者ID: {sender_id} | 有文本: {has_text}")
             
@@ -617,6 +640,28 @@ class TelegramClientManager:
             
         except Exception as e:
             logger.error(f"❌ 处理消息失败: {e}", exc_info=True)
+
+    async def _is_duplicate_message(self, chat_id: Optional[int], message_id: Optional[int]) -> bool:
+        """使用 chat_id + message_id 做短时间去重，避免同一条消息被重复处理。"""
+        if chat_id is None or message_id is None:
+            return False
+
+        message_key = (chat_id, message_id)
+        now = monotonic()
+
+        async with self._processed_messages_lock:
+            expired_keys = [
+                key for key, processed_at in self._processed_messages.items()
+                if now - processed_at > 120
+            ]
+            for key in expired_keys:
+                self._processed_messages.pop(key, None)
+
+            if message_key in self._processed_messages:
+                return True
+
+            self._processed_messages[message_key] = now
+            return False
     
     async def _send_via_bot(self, text: str, sender_id: int, source_chat_id: int, message_id: int):
         """通过 Bot API 发送消息"""
