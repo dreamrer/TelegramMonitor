@@ -129,6 +129,12 @@ class TelegramService:
                     'status': '无代理',
                     'url': None
                 }
+            elif proxy_type == 'http':
+                return {
+                    'type': 'http',
+                    'status': 'HTTP代理',
+                    'url': proxy_url
+                }
             elif proxy_type == 'socks5':
                 return {
                     'type': 'socks5',

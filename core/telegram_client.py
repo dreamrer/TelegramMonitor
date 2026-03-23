@@ -13,10 +13,15 @@ import uuid
 from time import monotonic
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, urlparse
 
 from decouple import config
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError, EmailUnconfirmedError
+from telethon.network.connection import (
+    ConnectionTcpMTProxyIntermediate,
+    ConnectionTcpMTProxyRandomizedIntermediate,
+)
 from telethon.tl.types import User, Chat, Channel, Dialog
 
 from core.database import get_config, set_config
@@ -251,7 +256,223 @@ class TelegramClientManager:
         
         # 设备指纹管理器
         self.device_fingerprint = DeviceFingerprint(self.session_path)
-    
+
+    def _mask_proxy_secret(self, secret: Optional[str]) -> str:
+        """隐藏代理敏感信息，避免在状态页泄露密码或密钥。"""
+        if not secret:
+            return ""
+        if len(secret) <= 4:
+            return "*" * len(secret)
+        return f"{secret[:4]}***"
+
+    def _build_proxy_display_url(
+        self,
+        proxy_type: str,
+        host: str,
+        port: int,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        secret: Optional[str] = None,
+    ) -> str:
+        """生成用于展示的代理地址，敏感字段只显示掩码。"""
+        if proxy_type == "mtproxy":
+            return f"{host}:{port}:{self._mask_proxy_secret(secret)}"
+
+        if username and password:
+            return f"{host}:{port}:{username}:******"
+
+        return f"{host}:{port}"
+
+    def _parse_standard_proxy(self, proxy_type: str, proxy_url: str, source: str = "manual") -> Dict:
+        """解析 Socks5/HTTP 代理。"""
+        if not proxy_url:
+            raise ValueError("代理地址不能为空")
+
+        username = None
+        password = None
+
+        if "://" in proxy_url:
+            parsed = urlparse(proxy_url)
+            host = parsed.hostname
+            port = parsed.port
+            username = parsed.username
+            password = parsed.password
+        else:
+            parts = proxy_url.split(":")
+            if len(parts) == 2:
+                host, port = parts
+            elif len(parts) == 4:
+                host, port, username, password = parts
+            else:
+                raise ValueError("代理地址格式错误")
+
+        if not host or not port:
+            raise ValueError("代理地址缺少主机或端口")
+
+        normalized = {
+            'type': proxy_type,
+            'url': self._build_proxy_display_url(proxy_type, host, int(port), username, password),
+            'host': host,
+            'port': int(port),
+            'username': username or None,
+            'password': password or None,
+            'source': source,
+        }
+        return normalized
+
+    def _parse_mtproxy(self, proxy_url: str, source: str = "manual") -> Dict:
+        """解析 MTProxy 链接或 server:port:secret 形式。"""
+        if not proxy_url:
+            raise ValueError("MTProxy 地址不能为空")
+
+        if proxy_url.startswith(("https://t.me/proxy?", "http://t.me/proxy?", "tg://proxy?")):
+            parsed = urlparse(proxy_url)
+            params = parse_qs(parsed.query)
+            server = params.get('server', [None])[0]
+            port = params.get('port', [None])[0]
+            secret = params.get('secret', [None])[0]
+        else:
+            parts = proxy_url.split(":", 2)
+            if len(parts) != 3:
+                raise ValueError("MTProxy 地址格式错误")
+            server, port, secret = parts
+
+        if not server or not port or not secret:
+            raise ValueError("MTProxy 配置不完整")
+
+        normalized = {
+            'type': 'mtproxy',
+            'url': self._build_proxy_display_url('mtproxy', server, int(port), secret=secret),
+            'server': server,
+            'port': int(port),
+            'secret': secret,
+            'source': source,
+        }
+        return normalized
+
+    def _normalize_proxy_config(
+        self,
+        proxy_type: str,
+        proxy_url: str = None,
+        existing_config: Optional[Dict] = None,
+        source: str = "manual",
+    ) -> Dict:
+        """归一化代理配置，兼容旧配置和环境变量配置。"""
+        proxy_type = (proxy_type or 'none').lower()
+        existing_config = existing_config or {}
+
+        if proxy_type == 'none':
+            return {'type': 'none', 'url': None, 'source': source}
+
+        if proxy_type in {'socks5', 'http'}:
+            if existing_config.get('host') and existing_config.get('port'):
+                return {
+                    'type': proxy_type,
+                    'url': existing_config.get('url') or self._build_proxy_display_url(
+                        proxy_type,
+                        existing_config['host'],
+                        int(existing_config['port']),
+                        existing_config.get('username'),
+                        existing_config.get('password'),
+                    ),
+                    'host': existing_config['host'],
+                    'port': int(existing_config['port']),
+                    'username': existing_config.get('username') or None,
+                    'password': existing_config.get('password') or None,
+                    'source': existing_config.get('source', source),
+                }
+            return self._parse_standard_proxy(proxy_type, proxy_url or existing_config.get('url'), source)
+
+        if proxy_type == 'mtproxy':
+            if existing_config.get('server') and existing_config.get('port') and existing_config.get('secret'):
+                return {
+                    'type': 'mtproxy',
+                    'url': existing_config.get('url') or self._build_proxy_display_url(
+                        'mtproxy',
+                        existing_config['server'],
+                        int(existing_config['port']),
+                        secret=existing_config.get('secret'),
+                    ),
+                    'server': existing_config['server'],
+                    'port': int(existing_config['port']),
+                    'secret': existing_config['secret'],
+                    'source': existing_config.get('source', source),
+                }
+            return self._parse_mtproxy(proxy_url or existing_config.get('url'), source)
+
+        raise ValueError(f"不支持的代理类型: {proxy_type}")
+
+    def _get_env_proxy_config(self) -> Dict:
+        """从环境变量读取代理配置，供无数据库配置时兜底。"""
+        proxy_type = config('PROXY_TYPE', default='none').lower()
+
+        if proxy_type == 'none':
+            return {'type': 'none', 'url': None, 'source': 'env'}
+
+        if proxy_type in {'socks5', 'http'}:
+            host = config('PROXY_HOST', default=None)
+            port = config('PROXY_PORT', default=None)
+            username = config('PROXY_USERNAME', default=None)
+            password = config('PROXY_PASSWORD', default=None)
+
+            if not host or not port:
+                raise ValueError("环境变量代理配置缺少 PROXY_HOST 或 PROXY_PORT")
+
+            proxy_url = f"{host}:{port}"
+            if username and password:
+                proxy_url = f"{proxy_url}:{username}:{password}"
+
+            return self._parse_standard_proxy(proxy_type, proxy_url, source='env')
+
+        if proxy_type == 'mtproxy':
+            server = config('PROXY_HOST', default=None)
+            port = config('PROXY_PORT', default=None)
+            secret = config('PROXY_SECRET', default=None)
+
+            if not server or not port or not secret:
+                raise ValueError("环境变量 MTProxy 配置缺少 PROXY_HOST、PROXY_PORT 或 PROXY_SECRET")
+
+            return self._parse_mtproxy(f"{server}:{port}:{secret}", source='env')
+
+        raise ValueError(f"不支持的环境变量代理类型: {proxy_type}")
+
+    def _build_telethon_proxy_settings(self, proxy_config: Dict) -> Dict:
+        """将归一化配置转换成 Telethon 需要的 connection/proxy 参数。"""
+        proxy_type = proxy_config.get('type', 'none')
+
+        if proxy_type == 'none':
+            return {}
+
+        if proxy_type in {'socks5', 'http'}:
+            proxy = (
+                proxy_type,
+                proxy_config['host'],
+                int(proxy_config['port']),
+                True,
+                proxy_config.get('username'),
+                proxy_config.get('password'),
+            )
+            return {'proxy': proxy}
+
+        if proxy_type == 'mtproxy':
+            secret = proxy_config['secret']
+            connection = (
+                ConnectionTcpMTProxyRandomizedIntermediate
+                if secret.lower().startswith('dd')
+                else ConnectionTcpMTProxyIntermediate
+            )
+            proxy = (
+                proxy_config['server'],
+                int(proxy_config['port']),
+                secret,
+            )
+            return {
+                'connection': connection,
+                'proxy': proxy,
+            }
+
+        raise ValueError(f"不支持的代理类型: {proxy_type}")
+
     async def create_client(self, phone: str) -> TelegramClient:
         """创建Telegram客户端"""
         session_file = self.session_path / f"{phone.replace('+', '')}.session"
@@ -262,6 +483,14 @@ class TelegramClientManager:
         logger.info(f"使用设备: {fingerprint.get('device_model')} | "
                    f"系统: {fingerprint.get('system_version')} | "
                    f"TG版本: {fingerprint.get('app_version')}")
+
+        proxy_config = await self.get_proxy_config()
+        proxy_settings = self._build_telethon_proxy_settings(proxy_config)
+        if proxy_config.get('type') != 'none':
+            logger.info(
+                f"应用代理配置: {proxy_config.get('type')} | "
+                f"{proxy_config.get('url')} | 来源: {proxy_config.get('source', 'manual')}"
+            )
         
         self.client = TelegramClient(
             str(session_file),
@@ -272,6 +501,7 @@ class TelegramClientManager:
             app_version=fingerprint.get('app_version', '10.0.0'),
             lang_code=fingerprint.get('lang_code', 'en'),
             system_lang_code=fingerprint.get('system_lang_code', 'en-US'),
+            **proxy_settings,
         )
         
         return self.client
@@ -830,17 +1060,16 @@ class TelegramClientManager:
     async def set_proxy(self, proxy_type: str, proxy_url: str = None) -> bool:
         """设置代理"""
         try:
-            proxy_config = {
-                'type': proxy_type,
-                'url': proxy_url
-            }
+            proxy_config = self._normalize_proxy_config(proxy_type, proxy_url, source='manual')
             
             await set_config("proxy_config", json.dumps(proxy_config))
             
-            # 如果客户端已连接，需要重新连接以应用代理
-            if self.client and self.client.is_connected():
-                await self.client.disconnect()
-                # 重新创建客户端时会应用新的代理设置
+            # 代理配置变更后，销毁当前客户端实例，确保下次连接按新代理重建。
+            if self.client:
+                await self.stop_monitoring()
+                if self.client.is_connected():
+                    await self.client.disconnect()
+                self.client = None
             
             return True
             
@@ -852,9 +1081,20 @@ class TelegramClientManager:
         """获取代理配置"""
         try:
             config_str = await get_config("proxy_config", "{}")
-            return json.loads(config_str)
-        except:
-            return {'type': 'none', 'url': None}
+            stored_config = json.loads(config_str) if config_str else {}
+
+            if stored_config and stored_config.get('type'):
+                return self._normalize_proxy_config(
+                    stored_config.get('type'),
+                    stored_config.get('url'),
+                    existing_config=stored_config,
+                    source=stored_config.get('source', 'manual'),
+                )
+
+            return self._get_env_proxy_config()
+        except Exception as e:
+            logger.warning(f"读取代理配置失败，已回退为无代理: {e}")
+            return {'type': 'none', 'url': None, 'source': 'fallback'}
 
 
 # 全局客户端管理器实例
