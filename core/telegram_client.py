@@ -691,16 +691,14 @@ class TelegramClientManager:
         
         # 第二行：广告按钮
         try:
-            from core.ad_integration import get_ad_service
-            ad_service = get_ad_service()
-            if ad_service and ad_service.manager:
-                ad_button_configs = ad_service.manager.get_buttons()
-                if ad_button_configs:
-                    ad_row = [
-                        InlineKeyboardButton(btn["text"], url=btn["url"])
-                        for btn in ad_button_configs
-                    ]
-                    keyboard.append(ad_row)
+            from core.ad_integration import get_ad_buttons
+            ad_button_configs = get_ad_buttons()
+            if ad_button_configs:
+                ad_row = [
+                    InlineKeyboardButton(btn["text"], url=btn["url"])
+                    for btn in ad_button_configs
+                ]
+                keyboard.append(ad_row)
         except Exception as e:
             logger.warning(f"获取广告按钮失败: {e}")
         
@@ -787,13 +785,11 @@ class TelegramClientManager:
             header_author = ""
             
             try:
-                from core.ad_integration import get_ad_service
-                ad_service = get_ad_service()
-                if ad_service and ad_service.manager:
-                    header = ad_service.manager.get_header()
-                    if header:
-                        header_title = header.get('title', header_title)
-                        header_author = header.get('author', '')
+                from core.ad_integration import get_ad_header
+                header = get_ad_header()
+                if header:
+                    header_title = header.get('title', header_title)
+                    header_author = header.get('author', '')
             except Exception as e:
                 logger.warning(f"获取header配置失败: {e}")
             
@@ -814,14 +810,12 @@ class TelegramClientManager:
             
             # 添加消息内广告链接（使用 ads 配置）
             try:
-                from core.ad_integration import get_ad_service
-                ad_service = get_ad_service()
-                if ad_service and ad_service.manager:
-                    ads = ad_service.manager.get_ads()
-                    if ads:
-                        formatted += "\n"
-                        for ad in ads:
-                            formatted += f"🔗 [{ad['title']}]({ad['url']})\n"
+                from core.ad_integration import get_ad_links
+                ads = get_ad_links()
+                if ads:
+                    formatted += "\n"
+                    for ad in ads:
+                        formatted += f"🔗 [{ad['title']}]({ad['url']})\n"
             except Exception as e:
                 logger.warning(f"获取广告链接失败: {e}")
             
