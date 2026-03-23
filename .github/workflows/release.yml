@@ -265,7 +265,9 @@ jobs:
             🏷 版本: ${{ steps.version.outputs.VERSION }}
 
             ✨ 本次更新:
-            已发布新版本，欢迎升级体验
+            - 修复监听重复转发问题
+            - 完善广告异常回退闭环
+            - 优化发布通知链路
 
             🔍 查看详情:
             https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.VERSION }}
@@ -287,7 +289,9 @@ jobs:
             🏷 版本: ${{ steps.version.outputs.VERSION }}
 
             ✨ 本次更新:
-            已发布新版本，欢迎升级体验
+            - 修复监听重复转发问题
+            - 完善广告异常回退闭环
+            - 优化发布通知链路
 
             🔍 查看详情:
             https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.VERSION }}
