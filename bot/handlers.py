@@ -19,6 +19,7 @@ from telegram.ext import (
 
 from bot.keyboards import *
 from core.database import get_user_state, set_user_state
+from core.utils import mask_sensitive_id
 from services.keyword_service import KeywordService
 from services.telegram_service import TelegramService
 from services.monitor_service import MonitorService
@@ -41,9 +42,9 @@ def check_authorization(func):
     @functools.wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
-        logger.debug(f"授权检查: 用户 {user_id}, 授权用户 {AUTHORIZED_USER_ID}")
+        logger.debug(f"授权检查: 用户 {mask_sensitive_id(user_id)}, 授权用户 {mask_sensitive_id(AUTHORIZED_USER_ID)}")
         if user_id != AUTHORIZED_USER_ID:
-            logger.warning(f"未授权用户尝试访问: {user_id}")
+            logger.warning(f"未授权用户尝试访问: {mask_sensitive_id(user_id)}")
             if update.message:
                 await update.message.reply_text("❌ 您没有权限使用此Bot")
             return
@@ -115,7 +116,7 @@ async def safe_edit_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
 @check_authorization
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """开始命令"""
-    logger.info(f"收到 /start 命令，用户ID: {update.effective_user.id}")
+    logger.info(f"收到 /start 命令，用户ID: {mask_sensitive_id(update.effective_user.id)}")
     
     welcome_text = """
 🤖 **Telegram Monitor Bot**

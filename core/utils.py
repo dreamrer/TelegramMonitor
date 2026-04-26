@@ -8,6 +8,14 @@ from typing import Optional
 import pytz
 
 
+def mask_sensitive_id(value: object, visible: int = 3) -> str:
+    """Mask IDs in logs while keeping enough context for debugging."""
+    text = str(value)
+    if len(text) <= visible * 2:
+        return "*" * len(text)
+    return f"{text[:visible]}***{text[-visible:]}"
+
+
 def get_current_time(timezone: str = 'Asia/Shanghai', format: str = '%Y-%m-%d %H:%M:%S') -> str:
     """
     获取当前时间

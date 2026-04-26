@@ -15,6 +15,7 @@ from telegram.ext import Application
 from bot.handlers import setup_handlers
 from core.database import init_database
 from core.ad_integration import init_ad_system
+from core.utils import mask_sensitive_id
 
 
 # 配置日志
@@ -23,6 +24,10 @@ logging.basicConfig(
     level=getattr(logging, config('LOG_LEVEL', default='INFO'))
 )
 logger = logging.getLogger(__name__)
+
+# Avoid leaking bot tokens in HTTP client request URLs at INFO level.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 async def post_init(app: Application) -> None:
@@ -56,7 +61,7 @@ async def post_init(app: Application) -> None:
             reply_markup=reply_markup,
             disable_web_page_preview=False
         )
-        logger.info(f"启动消息已发送给用户 {authorized_user_id}")
+        logger.info(f"启动消息已发送给用户 {mask_sensitive_id(authorized_user_id)}")
         
     except Exception as e:
         logger.warning(f"发送启动消息失败: {e}")
