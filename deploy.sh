@@ -13,8 +13,11 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-# 检查Docker Compose
-if ! command -v docker-compose &> /dev/null; then
+if docker compose version &> /dev/null; then
+    COMPOSE_CMD=(docker compose)
+elif command -v docker-compose &> /dev/null; then
+    COMPOSE_CMD=(docker-compose)
+else
     echo "❌ Docker Compose未安装，请先安装Docker Compose"
     exit 1
 fi
@@ -38,32 +41,32 @@ mkdir -p data/sessions logs
 
 # 构建镜像
 echo "🔨 构建Docker镜像..."
-docker-compose build
+"${COMPOSE_CMD[@]}" build
 
 # 启动容器
 echo "🚀 启动容器..."
-docker-compose up -d
+"${COMPOSE_CMD[@]}" up -d
 
 # 等待容器启动
 echo "⏳ 等待容器启动..."
 sleep 3
 
 # 检查容器状态
-if docker-compose ps | grep -q "telegram-monitor.*Up"; then
+if "${COMPOSE_CMD[@]}" ps | grep -q "telegram-monitor.*Up"; then
     echo "✅ 容器启动成功！"
     echo ""
     echo "📊 容器状态："
-    docker-compose ps
+    "${COMPOSE_CMD[@]}" ps
     echo ""
     echo "📝 查看日志："
-    echo "  docker-compose logs -f telegram-monitor"
+    echo "  ${COMPOSE_CMD[*]} logs -f telegram-monitor"
     echo ""
     echo "🛑 停止容器："
-    echo "  docker-compose down"
+    echo "  ${COMPOSE_CMD[*]} down"
 else
     echo "❌ 容器启动失败"
     echo "📝 查看错误日志："
-    docker-compose logs telegram-monitor
+    "${COMPOSE_CMD[@]}" logs telegram-monitor
     exit 1
 fi
 
