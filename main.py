@@ -14,7 +14,7 @@ from telegram.ext import Application
 
 from bot.handlers import setup_handlers
 from core.database import init_database
-from core.ad_integration import init_ad_system
+from core.ad_integration import init_ad_system, shutdown_ad_system
 from core.utils import mask_sensitive_id
 
 
@@ -67,6 +67,11 @@ async def post_init(app: Application) -> None:
         logger.warning(f"发送启动消息失败: {e}")
 
 
+async def post_shutdown(app: Application) -> None:
+    """Bot关闭后的清理回调"""
+    await shutdown_ad_system()
+
+
 async def main() -> None:
     """主函数"""
     try:
@@ -107,7 +112,7 @@ async def main() -> None:
             raise Exception("广告系统完整性验证失败，程序无法启动")
         
         # 创建Bot应用
-        app = Application.builder().token(bot_token).post_init(post_init).build()
+        app = Application.builder().token(bot_token).post_init(post_init).post_shutdown(post_shutdown).build()
         
         # 设置处理器
         setup_handlers(app)
@@ -127,7 +132,7 @@ if __name__ == "__main__":
     try:
         # 创建Bot应用
         bot_token = config('BOT_TOKEN')
-        app = Application.builder().token(bot_token).post_init(post_init).build()
+        app = Application.builder().token(bot_token).post_init(post_init).post_shutdown(post_shutdown).build()
         
         # 在同步上下文中初始化数据库和广告系统
         import asyncio

@@ -4,6 +4,8 @@
 """
 
 import logging
+import contextlib
+import asyncio
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -84,6 +86,24 @@ async def init_ad_system():
     except Exception as e:
         logger.error(f"广告系统初始化失败: {e}")
         raise Exception(f"系统启动失败: 广告模块异常 - {e}")
+
+
+async def shutdown_ad_system():
+    """停止广告模块后台任务，避免退出时留下 pending task。"""
+    global _ad_service
+
+    if _ad_service is None:
+        return
+
+    manager = getattr(_ad_service, 'manager', None)
+    sync_task = getattr(manager, '_sync_task', None) if manager is not None else None
+
+    if sync_task is not None and not sync_task.done():
+        sync_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sync_task
+
+    _ad_service = None
 
 
 def get_ad_service():
