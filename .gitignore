@@ -102,6 +102,7 @@ dmypy.json
 # Telegram Monitor specific
 sessions/
 logs/
+data/
 *.session
 *.session-journal
 config.ini

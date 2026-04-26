@@ -3,29 +3,25 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v2.0.0)'
+        description: "Version tag (for example: v2.0.0)"
         required: true
-        default: 'v2.0.0'
+        default: "v2.0.0"
 
 env:
-  DOCKER_IMAGE_NAME: telegram-monitor
-  PYTHON_VERSION: '3.11'
+  PYTHON_VERSION: "3.11"
 
 jobs:
-  # ============================================
-  # 构建 Docker 镜像
-  # ============================================
   docker:
     name: Build Docker Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -48,33 +44,31 @@ jobs:
 
       - name: Extract version
         id: version
+        shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "VERSION=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
           else
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
-            ghcr.io/${{ github.repository_owner }}/${{ env.DOCKER_IMAGE_NAME }}:latest
-            ghcr.io/${{ github.repository_owner }}/${{ env.DOCKER_IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_IMAGE_NAME }}:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
+            ghcr.io/${{ github.repository_owner }}/${{ secrets.DOCKER_IMAGE_NAME }}:latest
+            ghcr.io/${{ github.repository_owner }}/${{ secrets.DOCKER_IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
           no-cache: true
 
-  # ============================================
-  # 构建 Linux 二进制
-  # ============================================
   build-linux:
     name: Build Linux Binary
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -85,12 +79,14 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
       - name: Build binary with PyInstaller
+        shell: bash
         run: |
           pyinstaller --onefile \
             --name telegram-monitor-linux-x64 \
@@ -111,13 +107,10 @@ jobs:
           name: linux-binary
           path: dist/telegram-monitor-linux-x64
 
-  # ============================================
-  # 构建 Windows 二进制
-  # ============================================
   build-windows:
     name: Build Windows Binary
     runs-on: windows-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -128,12 +121,14 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
+        shell: powershell
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
       - name: Build binary with PyInstaller
+        shell: powershell
         run: |
           pyinstaller --onefile `
             --name telegram-monitor-windows-x64 `
@@ -154,27 +149,28 @@ jobs:
           name: windows-binary
           path: dist/telegram-monitor-windows-x64.exe
 
-  # ============================================
-  # 创建 Release
-  # ============================================
   release:
     name: Create Release
-    needs: [docker, build-linux, build-windows]
+    needs:
+      - docker
+      - build-linux
+      - build-windows
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Extract version
         id: version
+        shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "VERSION=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
           else
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Download Linux binary
@@ -190,25 +186,30 @@ jobs:
           path: ./artifacts/windows
 
       - name: Prepare release files
+        shell: bash
         run: |
           chmod +x ./artifacts/linux/telegram-monitor-linux-x64
-          
-          # 创建带配置文件的压缩包
+
           mkdir -p release/telegram-monitor
           cp .env.example release/telegram-monitor/.env.example
           cp README.md release/telegram-monitor/
           cp LICENSE release/telegram-monitor/
-          
-          # Linux 压缩包
+
           cp ./artifacts/linux/telegram-monitor-linux-x64 release/telegram-monitor/
-          cd release && tar -czvf telegram-monitor-linux-x64.tar.gz telegram-monitor && cd ..
+          (
+            cd release
+            tar -czvf telegram-monitor-linux-x64.tar.gz telegram-monitor
+          )
           rm release/telegram-monitor/telegram-monitor-linux-x64
-          
-          # Windows 压缩包
+
           cp ./artifacts/windows/telegram-monitor-windows-x64.exe release/telegram-monitor/
-          cd release && zip -r telegram-monitor-windows-x64.zip telegram-monitor && cd ..
+          (
+            cd release
+            zip -r telegram-monitor-windows-x64.zip telegram-monitor
+          )
 
       - name: Generate SHA256 checksums
+        shell: bash
         run: |
           cd release
           sha256sum telegram-monitor-linux-x64.tar.gz > SHA256SUMS.txt
@@ -216,37 +217,37 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        id: create_release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
           name: Telegram Monitor ${{ steps.version.outputs.VERSION }}
           body: |
-            ## 🚀 Telegram Monitor ${{ steps.version.outputs.VERSION }}
-            
-            ### 📦 下载方式
-            
-            | 方式 | 说明 |
-            |------|------|
-            | **Docker** | `docker pull ${{ secrets.DOCKERHUB_USERNAME }}/telegram-monitor:${{ steps.version.outputs.VERSION }}` |
-            | **Linux 二进制** | 下载 `telegram-monitor-linux-x64.tar.gz` |
-            | **Windows 二进制** | 下载 `telegram-monitor-windows-x64.zip` |
-            | **源码** | 下载 Source code |
-            
-            ### 🐳 Docker 快速启动
+            ## Telegram Monitor ${{ steps.version.outputs.VERSION }}
+
+            ### Downloads
+
+            | Type | Details |
+            |------|---------|
+            | Docker | `docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}` |
+            | Linux binary | Download `telegram-monitor-linux-x64.tar.gz` |
+            | Windows binary | Download `telegram-monitor-windows-x64.zip` |
+            | Source code | Download the GitHub source archive |
+
+            ### Quick Start
+
             ```bash
-            # 创建配置文件
             wget https://raw.githubusercontent.com/${{ github.repository }}/main/.env.example -O .env
-            # 编辑配置
             nano .env
-            # 启动容器
-            docker run -d --name telegram-monitor --env-file .env ${{ secrets.DOCKERHUB_USERNAME }}/telegram-monitor
+            docker run -d --name telegram-monitor --env-file .env ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
             ```
-            
-            ### 📝 更新日志
-            - 查看完整更新日志请访问 [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
-            
+
+            ### Update Notes
+
+            - Review the full release page for version details and release assets.
+
             ---
-            📢 [关注频道](https://t.me/langgefabu) | 💬 [社区交流](https://t.me/langgepython)
+            [Project Channel](https://t.me/langgefabu) | [Community Group](https://t.me/langgepython)
           files: |
             release/telegram-monitor-linux-x64.tar.gz
             release/telegram-monitor-windows-x64.zip
@@ -254,50 +255,19 @@ jobs:
           draft: false
           prerelease: false
 
-      - name: Send to Telegram Channel
-        uses: appleboy/telegram-action@master
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          to: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            🎉 Telegram Monitor Bot 新版本发布
+          python-version: ${{ env.PYTHON_VERSION }}
 
-            🏷 版本: ${{ steps.version.outputs.VERSION }}
-
-            ✨ 本次更新:
-            - 修复监听重复转发问题
-            - 完善广告异常回退闭环
-            - 优化发布通知链路
-
-            🔍 查看详情:
-            https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.VERSION }}
-
-            🐳 拉取镜像:
-            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/telegram-monitor:${{ steps.version.outputs.VERSION }}
-
-            📘 项目主页:
-            https://github.com/${{ github.repository }}
-
-      - name: Send to Telegram Group
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_GROUP_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            🎉 Telegram Monitor Bot 新版本发布
-
-            🏷 版本: ${{ steps.version.outputs.VERSION }}
-
-            ✨ 本次更新:
-            - 修复监听重复转发问题
-            - 完善广告异常回退闭环
-            - 优化发布通知链路
-
-            🔍 查看详情:
-            https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.VERSION }}
-
-            🐳 拉取镜像:
-            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/telegram-monitor:${{ steps.version.outputs.VERSION }}
-
-            📘 项目主页:
-            https://github.com/${{ github.repository }}
+      - name: Sync Telegram channel announcement
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKER_IMAGE_NAME: ${{ secrets.DOCKER_IMAGE_NAME }}
+          REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ steps.create_release.outputs.id }}
+          TAG_NAME: ${{ steps.version.outputs.VERSION }}
+        run: python .github/scripts/sync_release_telegram.py
