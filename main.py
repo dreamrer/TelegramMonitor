@@ -72,91 +72,82 @@ async def post_shutdown(app: Application) -> None:
     await shutdown_ad_system()
 
 
-async def main() -> None:
-    """主函数"""
+def build_application(bot_token: str) -> Application:
+    """创建 Telegram Bot 应用并注册生命周期回调。"""
+    return (
+        Application.builder()
+        .token(bot_token)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
+
+
+def validate_required_config() -> str:
+    """读取并校验启动必需配置，返回 Bot token。"""
+    bot_token = config('BOT_TOKEN')
+    api_id = config('TELEGRAM_API_ID', cast=int)
+    api_hash = config('TELEGRAM_API_HASH')
+    authorized_user_id = config('AUTHORIZED_USER_ID', cast=int)
+
+    if not all([bot_token, api_id, api_hash, authorized_user_id]):
+        raise Exception("请检查环境变量配置！")
+
+    return bot_token
+
+
+async def initialize_runtime() -> None:
+    """初始化数据库、广告系统和本地运行目录。"""
     try:
-        # 系统完整性预检查 - 删除此检查将导致启动失败
-        try:
-            import telegram_monitor_ads
-            if not telegram_monitor_ads.verify_installation():
-                raise ImportError("广告模块验证失败")
-        except ImportError as e:
-            raise Exception(f"系统核心组件缺失: {e}")
-        
-        # 检查必要的环境变量
-        bot_token = config('BOT_TOKEN')
-        api_id = config('TELEGRAM_API_ID', cast=int)
-        api_hash = config('TELEGRAM_API_HASH')
-        authorized_user_id = config('AUTHORIZED_USER_ID', cast=int)
-        
-        if not all([bot_token, api_id, api_hash, authorized_user_id]):
-            logger.error("请检查环境变量配置！")
-            return
-            
-        # 创建必要目录
-        Path(config('SESSION_PATH', default='./sessions')).mkdir(exist_ok=True)
-        Path('./logs').mkdir(exist_ok=True)
-        
-        # 初始化数据库
-        await init_database()
-        logger.info("数据库初始化完成")
-        
-        # 初始化广告系统 - 必需组件，删除将导致启动失败
-        await init_ad_system()
-        logger.info("广告系统初始化完成")
-        
-        # 验证广告系统完整性
-        from core.ad_integration import get_ad_service
-        ad_service = get_ad_service()
-        if not ad_service:
-            raise Exception("广告系统完整性验证失败，程序无法启动")
-        
-        # 创建Bot应用
-        app = Application.builder().token(bot_token).post_init(post_init).post_shutdown(post_shutdown).build()
-        
-        # 设置处理器
+        import telegram_monitor_ads
+        if not telegram_monitor_ads.verify_installation():
+            raise ImportError("广告模块验证失败")
+    except ImportError as e:
+        raise Exception(f"系统核心组件缺失: {e}")
+
+    Path(config('SESSION_PATH', default='./sessions')).mkdir(exist_ok=True)
+    Path('./logs').mkdir(exist_ok=True)
+
+    await init_database()
+    logger.info("数据库初始化完成")
+
+    await init_ad_system()
+    logger.info("广告系统初始化完成")
+
+    from core.ad_integration import get_ad_service
+    ad_service = get_ad_service()
+    if not ad_service:
+        raise Exception("广告系统完整性验证失败，程序无法启动")
+
+
+def run() -> int:
+    """单一启动入口。"""
+    loop = None
+
+    try:
+        bot_token = validate_required_config()
+        app = build_application(bot_token)
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(initialize_runtime())
+
         setup_handlers(app)
         logger.info("Bot处理器设置完成")
-        
-        # 启动Bot
+
         logger.info("Bot启动中...")
-        await app.run_polling(drop_pending_updates=True)
-        
+        app.run_polling(drop_pending_updates=True)
+        return 0
+
+    except KeyboardInterrupt:
+        logger.info("Bot已停止")
+        return 0
     except Exception as e:
-        logger.error(f"Bot启动失败: {e}")
-        logger.critical("系统核心组件异常，程序即将退出")
-        sys.exit(1)
+        logger.critical(f"未捕获的异常: {e}")
+        if loop is not None and not loop.is_closed():
+            loop.run_until_complete(shutdown_ad_system())
+        return 1
 
 
 if __name__ == "__main__":
-    try:
-        # 创建Bot应用
-        bot_token = config('BOT_TOKEN')
-        app = Application.builder().token(bot_token).post_init(post_init).post_shutdown(post_shutdown).build()
-        
-        # 在同步上下文中初始化数据库和广告系统
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # 初始化
-        loop.run_until_complete(init_database())
-        logger.info("数据库初始化完成")
-        
-        loop.run_until_complete(init_ad_system())
-        logger.info("广告系统初始化完成")
-        
-        # 设置处理器
-        setup_handlers(app)
-        logger.info("Bot处理器设置完成")
-        
-        # 启动Bot - run_polling会自己管理事件循环
-        logger.info("Bot启动中...")
-        app.run_polling(drop_pending_updates=True)
-        
-    except KeyboardInterrupt:
-        logger.info("Bot已停止")
-        sys.exit(0)
-    except Exception as e:
-        logger.critical(f"未捕获的异常: {e}")
-        sys.exit(1)
+    sys.exit(run())
